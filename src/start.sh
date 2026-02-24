@@ -9,6 +9,10 @@ comfy-manager-set-mode offline || echo "worker-comfyui - Could not set ComfyUI-M
 
 echo "worker-comfyui: Starting ComfyUI"
 
+echo "Symlinking files from Network Volume"
+rm -rf /workspace && \
+  ln -s /runpod-volume /workspace
+
 # Allow operators to tweak verbosity; default is DEBUG.
 : "${COMFY_LOG_LEVEL:=DEBUG}"
 
