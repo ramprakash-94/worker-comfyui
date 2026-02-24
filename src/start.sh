@@ -11,7 +11,7 @@ echo "worker-comfyui: Starting ComfyUI"
 
 echo "Symlinking files from Network Volume"
 rm -rf /workspace && \
-  ln -s /runpod-volume /workspace
+  ln -s /runpod-volume /workspace/ComfyUI
 
 # Allow operators to tweak verbosity; default is DEBUG.
 : "${COMFY_LOG_LEVEL:=DEBUG}"
