@@ -100,7 +100,8 @@ RUN uv pip install \
     "clip_interrogator>=0.6.0" \
     lark \
     onnxruntime \
-    spandrel
+    spandrel \
+    torchlanc
 
 # Add application code and scripts
 ADD src/start.sh src/network_volume.py handler.py test_input.json ./
