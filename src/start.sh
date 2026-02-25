@@ -5,7 +5,7 @@ TCMALLOC="$(ldconfig -p | grep -Po "libtcmalloc.so.\d" | head -n 1)"
 export LD_PRELOAD="${TCMALLOC}"
 
 # Verify the network volume is mounted and ComfyUI is present on it
-COMFYUI_PATH="/runpod-volume/ComfyUI"
+COMFYUI_PATH="/runpod-volume/runpod-slim/ComfyUI"
 if [ ! -f "${COMFYUI_PATH}/main.py" ]; then
     echo "worker-comfyui: ERROR - ComfyUI not found at ${COMFYUI_PATH}/main.py" >&2
     echo "worker-comfyui: Make sure a network volume is attached to this endpoint and ComfyUI is installed on it." >&2
@@ -23,7 +23,7 @@ echo "worker-comfyui: Starting ComfyUI"
 echo "Symlinking files from Network Volume"
 rm -rf /workspace && \
   mkdir -p /workspace && \
-  ln -s /runpod-volume /workspace/ComfyUI
+  ln -s /runpod-volume/runpod-slim /workspace/ComfyUI
 
 # Allow operators to tweak verbosity; default is DEBUG.
 : "${COMFY_LOG_LEVEL:=DEBUG}"
