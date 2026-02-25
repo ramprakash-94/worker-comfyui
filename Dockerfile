@@ -22,6 +22,7 @@ ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 # Install Python, git and other necessary tools
 RUN apt-get update && apt-get install -y \
     python3.12 \
+    python3.12-dev \
     python3.12-venv \
     git \
     wget \
