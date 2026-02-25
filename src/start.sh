@@ -4,8 +4,19 @@
 TCMALLOC="$(ldconfig -p | grep -Po "libtcmalloc.so.\d" | head -n 1)"
 export LD_PRELOAD="${TCMALLOC}"
 
-# Ensure ComfyUI-Manager runs in offline network mode inside the container
-comfy-manager-set-mode offline || echo "worker-comfyui - Could not set ComfyUI-Manager network_mode" >&2
+# Verify the network volume is mounted and ComfyUI is present on it
+COMFYUI_PATH="/runpod-volume/ComfyUI"
+if [ ! -f "${COMFYUI_PATH}/main.py" ]; then
+    echo "worker-comfyui: ERROR - ComfyUI not found at ${COMFYUI_PATH}/main.py" >&2
+    echo "worker-comfyui: Make sure a network volume is attached to this endpoint and ComfyUI is installed on it." >&2
+    echo "worker-comfyui: Contents of /runpod-volume (if mounted):" >&2
+    ls /runpod-volume 2>&1 >&2 || echo "worker-comfyui: /runpod-volume is not mounted" >&2
+    exit 1
+fi
+
+# Ensure ComfyUI-Manager runs in offline mode (targets the network volume's ComfyUI)
+COMFYUI_MANAGER_CONFIG="${COMFYUI_PATH}/user/default/ComfyUI-Manager/config.ini" \
+  comfy-manager-set-mode offline || echo "worker-comfyui - Could not set ComfyUI-Manager network_mode" >&2
 
 echo "worker-comfyui: Starting ComfyUI"
 
