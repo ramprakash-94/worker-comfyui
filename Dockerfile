@@ -73,6 +73,22 @@ WORKDIR /
 # Install Python runtime dependencies for the handler
 RUN uv pip install runpod requests websocket-client
 
+# Install pip dependencies for custom nodes used in the pipeline workflow.
+# The node *code* lives on the network volume at runtime; only the Python
+# packages go into the image so there is nothing to keep in sync.
+RUN git clone --depth=1 https://github.com/kijai/ComfyUI-KJNodes              /tmp/cn/KJNodes && \
+    git clone --depth=1 https://github.com/kijai/ComfyUI-WanVideoWrapper       /tmp/cn/WanVideo && \
+    git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite /tmp/cn/VHS && \
+    git clone --depth=1 https://github.com/city96/ComfyUI-GGUF                 /tmp/cn/GGUF && \
+    git clone --depth=1 https://github.com/Fannovel16/comfyui_frame_interpolation /tmp/cn/RIFE && \
+    git clone --depth=1 https://github.com/yolain/ComfyUI-Easy-Use             /tmp/cn/EasyUse && \
+    git clone --depth=1 https://github.com/rgthree/rgthree-comfy               /tmp/cn/rgthree && \
+    git clone --depth=1 https://github.com/pythongosssss/ComfyUI-Custom-Scripts /tmp/cn/custom-scripts
+RUN for d in /tmp/cn/*/; do \
+        [ -f "$d/requirements.txt" ] && uv pip install -r "$d/requirements.txt" || true; \
+    done && \
+    rm -rf /tmp/cn
+
 # Add application code and scripts
 ADD src/start.sh src/network_volume.py handler.py test_input.json ./
 RUN chmod +x /start.sh
