@@ -101,7 +101,8 @@ RUN uv pip install \
     lark \
     onnxruntime \
     spandrel \
-    torchlanc
+    torchlanc \
+    sageattention
 
 # Add application code and scripts
 ADD src/start.sh src/network_volume.py handler.py test_input.json ./
