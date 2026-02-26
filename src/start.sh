@@ -4,6 +4,11 @@
 TCMALLOC="$(ldconfig -p | grep -Po "libtcmalloc.so.\d" | head -n 1)"
 export LD_PRELOAD="${TCMALLOC}"
 
+# Force the native synchronous CUDA allocator.
+# A100/H100 default to cudaMallocAsync which conflicts with torch.compile's
+# cudagraphs backend (checkPoolLiveAllocations error). Native allocator avoids this.
+export PYTORCH_CUDA_ALLOC_CONF="backend:native"
+
 # Verify the network volume is mounted and ComfyUI is present on it
 COMFYUI_PATH="/runpod-volume/runpod-slim/ComfyUI"
 if [ ! -f "${COMFYUI_PATH}/main.py" ]; then
