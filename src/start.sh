@@ -26,6 +26,7 @@ wan_dir = "/runpod-volume/runpod-slim/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapp
 if not os.path.isdir(wan_dir):
     print("worker-comfyui: WanVideoWrapper not found, skipping eager-backend patch")
     sys.exit(0)
+import re
 patched = False
 for root, _, files in os.walk(wan_dir):
     for fname in files:
@@ -36,9 +37,16 @@ for root, _, files in os.walk(wan_dir):
             text = fh.read()
         if "WanVideoTorchCompileSettings" not in text:
             continue
-        new_text = text.replace(
-            '["inductor", "cudagraphs"]',
-            '["inductor", "cudagraphs", "eager"]',
+        # Match both quote styles: ["inductor", "cudagraphs"] or ['inductor', 'cudagraphs']
+        # Skip if 'eager' is already present (idempotent)
+        if "eager" in text and "WanVideoTorchCompileSettings" in text:
+            print(f"worker-comfyui: WanVideoWrapper eager-backend already present in {path}")
+            patched = True
+            continue
+        new_text = re.sub(
+            r'''(["'])inductor\1,\s*(["'])cudagraphs\2''',
+            r'''"inductor", "cudagraphs", "eager"''',
+            text,
         )
         if new_text != text:
             with open(path, "w") as fh:
@@ -46,7 +54,7 @@ for root, _, files in os.walk(wan_dir):
             print(f"worker-comfyui: Patched {path} — added 'eager' to torch.compile backend list")
             patched = True
 if not patched:
-    print("worker-comfyui: WanVideoWrapper eager-backend patch: already applied or pattern not found")
+    print("worker-comfyui: WanVideoWrapper eager-backend patch: pattern not found — check node file")
 PYEOF
 
 # Ensure ComfyUI-Manager runs in offline mode (targets the network volume's ComfyUI)
