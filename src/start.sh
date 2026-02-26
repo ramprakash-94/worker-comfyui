@@ -4,11 +4,6 @@
 TCMALLOC="$(ldconfig -p | grep -Po "libtcmalloc.so.\d" | head -n 1)"
 export LD_PRELOAD="${TCMALLOC}"
 
-# Force the native synchronous CUDA allocator.
-# A100/H100 default to cudaMallocAsync which conflicts with torch.compile's
-# cudagraphs backend (checkPoolLiveAllocations error). Native allocator avoids this.
-export PYTORCH_CUDA_ALLOC_CONF="backend:native"
-
 # Verify the network volume is mounted and ComfyUI is present on it
 COMFYUI_PATH="/runpod-volume/runpod-slim/ComfyUI"
 if [ ! -f "${COMFYUI_PATH}/main.py" ]; then
@@ -18,6 +13,41 @@ if [ ! -f "${COMFYUI_PATH}/main.py" ]; then
     ls /runpod-volume 2>&1 >&2 || echo "worker-comfyui: /runpod-volume is not mounted" >&2
     exit 1
 fi
+
+# Patch WanVideoWrapper: add 'eager' as a valid torch.compile backend.
+# The node ships with only ['inductor', 'cudagraphs']:
+#   - inductor needs triton (not installed)
+#   - cudagraphs calls checkPoolLiveAllocations which cudaMallocAsync (A100 default) doesn't support
+# 'eager' is a no-op compile backend (safe on all GPUs, no graph capture, no triton).
+# Setting PYTORCH_CUDA_ALLOC_CONF=backend:native causes a PyTorch assertion on A100 — don't use it.
+python3 - <<'PYEOF'
+import os, sys
+wan_dir = "/runpod-volume/runpod-slim/ComfyUI/custom_nodes/WanVideoWrapper"
+if not os.path.isdir(wan_dir):
+    print("worker-comfyui: WanVideoWrapper not found, skipping eager-backend patch")
+    sys.exit(0)
+patched = False
+for root, _, files in os.walk(wan_dir):
+    for fname in files:
+        if not fname.endswith(".py"):
+            continue
+        path = os.path.join(root, fname)
+        with open(path) as fh:
+            text = fh.read()
+        if "WanVideoTorchCompileSettings" not in text:
+            continue
+        new_text = text.replace(
+            '["inductor", "cudagraphs"]',
+            '["inductor", "cudagraphs", "eager"]',
+        )
+        if new_text != text:
+            with open(path, "w") as fh:
+                fh.write(new_text)
+            print(f"worker-comfyui: Patched {path} — added 'eager' to torch.compile backend list")
+            patched = True
+if not patched:
+    print("worker-comfyui: WanVideoWrapper eager-backend patch: already applied or pattern not found")
+PYEOF
 
 # Ensure ComfyUI-Manager runs in offline mode (targets the network volume's ComfyUI)
 COMFYUI_MANAGER_CONFIG="${COMFYUI_PATH}/user/default/ComfyUI-Manager/config.ini" \
