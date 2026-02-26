@@ -14,49 +14,6 @@ if [ ! -f "${COMFYUI_PATH}/main.py" ]; then
     exit 1
 fi
 
-# Patch WanVideoWrapper: add 'eager' as a valid torch.compile backend.
-# The node ships with only ['inductor', 'cudagraphs']:
-#   - inductor needs triton (not installed)
-#   - cudagraphs calls checkPoolLiveAllocations which cudaMallocAsync (A100 default) doesn't support
-# 'eager' is a no-op compile backend (safe on all GPUs, no graph capture, no triton).
-# Setting PYTORCH_CUDA_ALLOC_CONF=backend:native causes a PyTorch assertion on A100 — don't use it.
-python3 - <<'PYEOF'
-import os, sys
-wan_dir = "/runpod-volume/runpod-slim/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper"
-if not os.path.isdir(wan_dir):
-    print("worker-comfyui: WanVideoWrapper not found, skipping eager-backend patch")
-    sys.exit(0)
-import re
-patched = False
-for root, _, files in os.walk(wan_dir):
-    for fname in files:
-        if not fname.endswith(".py"):
-            continue
-        path = os.path.join(root, fname)
-        with open(path) as fh:
-            text = fh.read()
-        if "WanVideoTorchCompileSettings" not in text:
-            continue
-        # Match both quote styles: ["inductor", "cudagraphs"] or ['inductor', 'cudagraphs']
-        # Skip if 'eager' is already present (idempotent)
-        if "eager" in text and "WanVideoTorchCompileSettings" in text:
-            print(f"worker-comfyui: WanVideoWrapper eager-backend already present in {path}")
-            patched = True
-            continue
-        new_text = re.sub(
-            r'''(["'])inductor\1,\s*(["'])cudagraphs\2''',
-            r'''"inductor", "cudagraphs", "eager"''',
-            text,
-        )
-        if new_text != text:
-            with open(path, "w") as fh:
-                fh.write(new_text)
-            print(f"worker-comfyui: Patched {path} — added 'eager' to torch.compile backend list")
-            patched = True
-if not patched:
-    print("worker-comfyui: WanVideoWrapper eager-backend patch: pattern not found — check node file")
-PYEOF
-
 # Ensure ComfyUI-Manager runs in offline mode (targets the network volume's ComfyUI)
 COMFYUI_MANAGER_CONFIG="${COMFYUI_PATH}/user/default/ComfyUI-Manager/config.ini" \
   comfy-manager-set-mode offline || echo "worker-comfyui - Could not set ComfyUI-Manager network_mode" >&2
