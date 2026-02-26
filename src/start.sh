@@ -22,7 +22,7 @@ fi
 # Setting PYTORCH_CUDA_ALLOC_CONF=backend:native causes a PyTorch assertion on A100 — don't use it.
 python3 - <<'PYEOF'
 import os, sys
-wan_dir = "/runpod-volume/runpod-slim/ComfyUI/custom_nodes/WanVideoWrapper"
+wan_dir = "/runpod-volume/runpod-slim/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper"
 if not os.path.isdir(wan_dir):
     print("worker-comfyui: WanVideoWrapper not found, skipping eager-backend patch")
     sys.exit(0)
