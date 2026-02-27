@@ -30,12 +30,12 @@ rm -rf /workspace && \
 
 # Serve the API and don't shutdown the container
 if [ "$SERVE_API_LOCALLY" == "true" ]; then
-    python -u "${COMFYUI_PATH}/main.py" --disable-auto-launch --disable-metadata --listen --verbose "${COMFY_LOG_LEVEL}" --log-stdout --highvram 2>&1 &
+    python -u "${COMFYUI_PATH}/main.py" --disable-auto-launch --disable-metadata --listen --verbose "${COMFY_LOG_LEVEL}" --log-stdout 2>&1 &
 
     echo "worker-comfyui: Starting RunPod Handler"
     python -u /handler.py --rp_serve_api --rp_api_host=0.0.0.0
 else
-    python -u "${COMFYUI_PATH}/main.py" --disable-auto-launch --disable-metadata --verbose "${COMFY_LOG_LEVEL}" --log-stdout --highvram 2>&1 &
+    python -u "${COMFYUI_PATH}/main.py" --disable-auto-launch --disable-metadata --verbose "${COMFY_LOG_LEVEL}" --log-stdout 2>&1 &
 
     echo "worker-comfyui: Starting RunPod Handler"
     python -u /handler.py
