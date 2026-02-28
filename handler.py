@@ -713,6 +713,17 @@ def handler(job):
                         errors.append(warn_msg)
                         continue
 
+                    # Skip video files — they are already saved to the network
+                    # volume output directory and don't need to be base64-encoded
+                    # into the response (which would exceed RunPod's ~20MB limit
+                    # for multi-segment workflows).
+                    file_ext = os.path.splitext(filename)[1].lower()
+                    if file_ext in (".mp4", ".webm", ".gif", ".webp", ".avi", ".mov"):
+                        print(
+                            f"worker-comfyui - Skipping video {filename} (available on network volume)"
+                        )
+                        continue
+
                     image_bytes = get_image_data(filename, subfolder, img_type)
 
                     if image_bytes:
