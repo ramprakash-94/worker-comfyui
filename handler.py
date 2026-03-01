@@ -504,6 +504,61 @@ def get_image_data(filename, subfolder, image_type):
         return None
 
 
+COMFYUI_OUTPUT_DIR = "/runpod-volume/runpod-slim/ComfyUI/output"
+
+
+def handle_concat_videos(concat_request):
+    """
+    Concatenate multiple video files on the network volume using ffmpeg.
+
+    Args:
+        concat_request (dict): Must contain:
+            - video_paths (list[str]): Paths relative to ComfyUI output dir
+            - output_path (str): Output path relative to ComfyUI output dir
+
+    Returns:
+        dict: Status and output path, or error.
+    """
+    import subprocess
+
+    video_paths = concat_request.get("video_paths", [])
+    output_rel = concat_request.get("output_path", "")
+
+    if not video_paths or not output_rel:
+        return {"error": "concat_videos requires 'video_paths' and 'output_path'"}
+
+    # Verify all input files exist
+    abs_paths = []
+    for vp in video_paths:
+        full = os.path.join(COMFYUI_OUTPUT_DIR, vp)
+        if not os.path.isfile(full):
+            return {"error": f"Video not found: {full}"}
+        abs_paths.append(full)
+
+    output_abs = os.path.join(COMFYUI_OUTPUT_DIR, output_rel)
+    os.makedirs(os.path.dirname(output_abs), exist_ok=True)
+
+    # Build ffmpeg concat list
+    concat_list = os.path.join(tempfile.gettempdir(), f"concat_{uuid.uuid4().hex}.txt")
+    with open(concat_list, "w") as f:
+        for p in abs_paths:
+            f.write(f"file '{p}'\n")
+
+    print(f"worker-comfyui - Concatenating {len(abs_paths)} videos → {output_abs}")
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list, "-c", "copy", output_abs],
+        capture_output=True, text=True, timeout=300,
+    )
+    os.remove(concat_list)
+
+    if result.returncode != 0:
+        print(f"worker-comfyui - ffmpeg concat failed: {result.stderr}")
+        return {"error": f"ffmpeg concat failed: {result.stderr[:500]}"}
+
+    print(f"worker-comfyui - Concat complete: {output_abs}")
+    return {"status": "success", "output_path": output_abs}
+
+
 def handler(job):
     """
     Handles a job using ComfyUI via websockets for status and image retrieval.
@@ -556,6 +611,7 @@ def handler(job):
     client_id = str(uuid.uuid4())
     prompt_id = None
     output_data = []
+    volume_videos = []
     errors = []
 
     try:
@@ -713,14 +769,16 @@ def handler(job):
                         errors.append(warn_msg)
                         continue
 
-                    # Skip video files — they are already saved to the network
-                    # volume output directory and don't need to be base64-encoded
-                    # into the response (which would exceed RunPod's ~20MB limit
-                    # for multi-segment workflows).
+                    # Skip video files — they are saved to the network volume
+                    # and don't need to be base64-encoded into the response
+                    # (which would exceed RunPod's ~20MB payload limit).
+                    # Track them in volume_paths so the caller knows where they are.
                     file_ext = os.path.splitext(filename)[1].lower()
                     if file_ext in (".mp4", ".webm", ".gif", ".webp", ".avi", ".mov"):
+                        vol_path = os.path.join(COMFYUI_OUTPUT_DIR, subfolder, filename) if subfolder else os.path.join(COMFYUI_OUTPUT_DIR, filename)
+                        volume_videos.append({"filename": filename, "node_id": node_id, "path": vol_path})
                         print(
-                            f"worker-comfyui - Skipping video {filename} (available on network volume)"
+                            f"worker-comfyui - Skipping video {filename} (saved to network volume: {vol_path})"
                         )
                         continue
 
@@ -824,27 +882,43 @@ def handler(job):
 
     final_result = {}
 
-    if output_data:
-        final_result["images"] = output_data
+    # Images (base64-encoded, e.g. __last_frame)
+    final_result["images"] = output_data
+
+    # Videos saved to network volume (not base64-encoded)
+    final_result["videos"] = volume_videos
 
     if errors:
         final_result["errors"] = errors
         print(f"worker-comfyui - Job completed with errors/warnings: {errors}")
 
-    if not output_data and errors:
-        print(f"worker-comfyui - Job failed with no output images.")
+    if not output_data and not volume_videos and errors:
+        print(f"worker-comfyui - Job failed with no output at all.")
         return {
-            "error": "Job processing failed",
+            "error": "Job processing failed — no images or videos produced",
             "details": errors,
         }
-    elif not output_data and not errors:
-        print(
-            f"worker-comfyui - Job completed successfully, but the workflow produced no images."
-        )
-        final_result["status"] = "success_no_images"
-        final_result["images"] = []
 
-    print(f"worker-comfyui - Job completed. Returning {len(output_data)} image(s).")
+    # Run post-workflow concat if requested (for multi-job video stitching)
+    concat_request = job_input.get("concat_videos") if isinstance(job_input, dict) else None
+    if concat_request:
+        print(f"worker-comfyui - Concat requested: {concat_request}")
+        if errors:
+            print(f"worker-comfyui - Skipping concat due to workflow errors: {errors}")
+            final_result["concat_error"] = f"Skipped due to workflow errors: {errors}"
+        else:
+            concat_result = handle_concat_videos(concat_request)
+            if concat_result.get("error"):
+                print(f"worker-comfyui - Concat failed: {concat_result['error']}")
+                final_result["concat_error"] = concat_result["error"]
+            else:
+                concat_path = concat_result.get("output_path", "")
+                print(f"worker-comfyui - Concat succeeded: {concat_path}")
+                final_result["concat_output"] = concat_path
+    else:
+        print(f"worker-comfyui - No concat requested.")
+
+    print(f"worker-comfyui - Job completed. images={len(output_data)}, videos={len(volume_videos)}")
     return final_result
 
 
