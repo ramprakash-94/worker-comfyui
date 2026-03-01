@@ -527,11 +527,31 @@ def handle_concat_videos(concat_request):
     if not video_paths or not output_rel:
         return {"error": "concat_videos requires 'video_paths' and 'output_path'"}
 
+    # List chain/ directory for debugging
+    chain_dir = os.path.join(COMFYUI_OUTPUT_DIR, "chain")
+    if os.path.isdir(chain_dir):
+        try:
+            subdirs = os.listdir(chain_dir)
+            print(f"worker-comfyui - chain/ directory contains: {subdirs}")
+            for sd in subdirs:
+                sd_path = os.path.join(chain_dir, sd)
+                if os.path.isdir(sd_path):
+                    print(f"worker-comfyui - chain/{sd}/ contains: {os.listdir(sd_path)}")
+        except Exception as e:
+            print(f"worker-comfyui - Error listing chain/ directory: {e}")
+
     # Verify all input files exist
     abs_paths = []
     for vp in video_paths:
         full = os.path.join(COMFYUI_OUTPUT_DIR, vp)
         if not os.path.isfile(full):
+            parent = os.path.dirname(full)
+            if os.path.isdir(parent):
+                contents = os.listdir(parent)
+                print(f"worker-comfyui - Video not found: {full}")
+                print(f"worker-comfyui - Directory {parent} contains: {contents}")
+            else:
+                print(f"worker-comfyui - Video not found: {full} (directory {parent} does not exist)")
             return {"error": f"Video not found: {full}"}
         abs_paths.append(full)
 
@@ -577,6 +597,14 @@ def handler(job):
 
     job_input = job["input"]
     job_id = job["id"]
+
+    # Clean up stale __last_frame files from previous jobs on this worker.
+    import glob as _glob
+    for stale in _glob.glob(os.path.join(COMFYUI_OUTPUT_DIR, "__last_frame*.png")):
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
 
     # Make sure that the input is valid
     validated_data, error_message = validate_input(job_input)
@@ -739,7 +767,7 @@ def handler(job):
             if not errors:
                 errors.append(warning_msg)
 
-        print(f"worker-comfyui - Processing {len(outputs)} output nodes...")
+        print(f"worker-comfyui - Processing {len(outputs)} output nodes: {list(outputs.keys())}")
         for node_id, node_output in outputs.items():
             # VHS_VideoCombine returns 'gifs'; other nodes use 'images' or 'videos'
             output_files = (
@@ -881,6 +909,34 @@ def handler(job):
             ws.close()
 
     final_result = {}
+
+    # Fallback: if __last_frame wasn't collected via the /view endpoint,
+    # read it directly from disk.  SaveImage writes to output dir before
+    # the handler reaches this point, so the file should exist if the node ran.
+    has_last_frame = any(
+        img.get("filename", "").startswith("__last_frame") for img in output_data
+    )
+    if not has_last_frame:
+        import glob as _glob
+        pattern = os.path.join(COMFYUI_OUTPUT_DIR, "__last_frame*.png")
+        candidates = sorted(_glob.glob(pattern))
+        if candidates:
+            lf_path = candidates[-1]  # latest if multiple
+            print(f"worker-comfyui - __last_frame not in outputs, reading from disk: {lf_path}")
+            try:
+                with open(lf_path, "rb") as f:
+                    lf_bytes = f.read()
+                lf_b64 = base64.b64encode(lf_bytes).decode("utf-8")
+                output_data.append({
+                    "filename": os.path.basename(lf_path),
+                    "type": "base64",
+                    "data": lf_b64,
+                })
+                print(f"worker-comfyui - __last_frame recovered from disk ({len(lf_bytes)} bytes)")
+            except Exception as e:
+                print(f"worker-comfyui - Failed to read __last_frame from disk: {e}")
+        else:
+            print(f"worker-comfyui - __last_frame not found on disk either (pattern: {pattern})")
 
     # Images (base64-encoded, e.g. __last_frame)
     final_result["images"] = output_data
