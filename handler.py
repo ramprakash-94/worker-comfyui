@@ -654,8 +654,36 @@ def handler(job):
     volume_videos = []
     errors = []
     missing_outputs = set()
+    executed_nodes = []        # Track which nodes ComfyUI actually runs
+    node_validation_errors = {}  # Capture validation errors from /prompt
 
     try:
+        # Clear ComfyUI's execution cache and free VRAM before each job.
+        # On RunPod serverless the same ComfyUI process handles multiple jobs
+        # sequentially.  Without clearing, ComfyUI's content-based execution
+        # cache can cause nodes to be silently skipped if it believes their
+        # outputs are already computed from a previous job.
+        try:
+            free_resp = requests.post(
+                f"http://{COMFY_HOST}/free",
+                json={"unload_models": False, "free_memory": True},
+                timeout=10,
+            )
+            print(f"worker-comfyui - POST /free (keep models): {free_resp.status_code}")
+        except Exception as e:
+            print(f"worker-comfyui - POST /free failed (non-fatal): {e}")
+
+        # Clear history to reset execution cache state between jobs
+        try:
+            clear_resp = requests.post(
+                f"http://{COMFY_HOST}/history",
+                json={"clear": True},
+                timeout=10,
+            )
+            print(f"worker-comfyui - POST /history clear: {clear_resp.status_code}")
+        except Exception as e:
+            print(f"worker-comfyui - POST /history clear failed (non-fatal): {e}")
+
         # Establish WebSocket connection
         ws_url = f"ws://{COMFY_HOST}/ws?clientId={client_id}"
         print(f"worker-comfyui - Connecting to websocket: {ws_url}")
@@ -681,6 +709,8 @@ def handler(job):
                 raise ValueError(
                     f"Missing 'prompt_id' in queue response: {queued_workflow}"
                 )
+            # Capture any node validation errors from queue response
+            node_validation_errors = queued_workflow.get("node_errors", {})
             print(f"worker-comfyui - Queued workflow with ID: {prompt_id}")
         except requests.RequestException as e:
             print(f"worker-comfyui - Error queuing workflow: {e}")
@@ -719,6 +749,7 @@ def handler(job):
                             execution_done = True
                             break
                         elif exec_node and data.get("prompt_id") == prompt_id:
+                            executed_nodes.append(exec_node)
                             print(f"worker-comfyui - Executing node {exec_node}")
                     elif message.get("type") == "execution_error":
                         data = message.get("data", {})
@@ -983,6 +1014,14 @@ def handler(job):
     # Diagnostic: report missing output nodes so callers can debug
     if missing_outputs:
         final_result["missing_outputs"] = sorted(missing_outputs)
+
+    # Diagnostic: which nodes ComfyUI actually executed
+    if executed_nodes:
+        final_result["executed_nodes"] = executed_nodes
+
+    # Diagnostic: node validation errors from /prompt acceptance
+    if node_validation_errors:
+        final_result["node_validation_errors"] = node_validation_errors
 
     if errors:
         final_result["errors"] = errors
