@@ -449,7 +449,19 @@ def queue_workflow(workflow, client_id, comfy_org_api_key=None):
 
     # For other HTTP errors, raise them normally
     response.raise_for_status()
-    return response.json()
+    result = response.json()
+
+    # Log validation details — ComfyUI may accept a prompt but exclude
+    # output nodes that fail validation (partial execution).
+    node_errors = result.get("node_errors", {})
+    if node_errors:
+        print(f"worker-comfyui - WARNING: ComfyUI reported {len(node_errors)} node validation errors:")
+        for nid, err in node_errors.items():
+            print(f"  Node {nid}: {err}")
+    else:
+        print("worker-comfyui - Prompt accepted, no node validation errors")
+
+    return result
 
 
 def get_history(prompt_id):
@@ -641,6 +653,7 @@ def handler(job):
     output_data = []
     volume_videos = []
     errors = []
+    missing_outputs = set()
 
     try:
         # Establish WebSocket connection
@@ -649,6 +662,11 @@ def handler(job):
         ws = websocket.WebSocket()
         ws.connect(ws_url, timeout=10)
         print(f"worker-comfyui - Websocket connected")
+
+        # Count expected output nodes for diagnostics
+        _OUTPUT_CLS = {"VHS_VideoCombine", "SaveImage", "PreviewImage", "VHS_SaveVideo"}
+        expected_outputs = [nid for nid, nd in workflow.items() if isinstance(nd, dict) and nd.get("class_type") in _OUTPUT_CLS]
+        print(f"worker-comfyui - Workflow has {len(workflow)} nodes, {len(expected_outputs)} expected output nodes: {expected_outputs}")
 
         # Queue the workflow
         try:
@@ -690,8 +708,9 @@ def handler(job):
                         )
                     elif message.get("type") == "executing":
                         data = message.get("data", {})
+                        exec_node = data.get("node")
                         if (
-                            data.get("node") is None
+                            exec_node is None
                             and data.get("prompt_id") == prompt_id
                         ):
                             print(
@@ -699,10 +718,12 @@ def handler(job):
                             )
                             execution_done = True
                             break
+                        elif exec_node and data.get("prompt_id") == prompt_id:
+                            print(f"worker-comfyui - Executing node {exec_node}")
                     elif message.get("type") == "execution_error":
                         data = message.get("data", {})
                         if data.get("prompt_id") == prompt_id:
-                            error_details = f"Node Type: {data.get('node_type')}, Node ID: {data.get('node_id')}, Message: {data.get('exception_message')}"
+                            error_details = f"Node Type: {data.get('node_type')}, Node ID: {data.get('node_id')}, Message: {data.get('exception_message')}, Traceback: {data.get('traceback', 'N/A')}"
                             print(
                                 f"worker-comfyui - Execution error received: {error_details}"
                             )
@@ -760,6 +781,21 @@ def handler(job):
 
         prompt_history = history.get(prompt_id, {})
         outputs = prompt_history.get("outputs", {})
+
+        # Compare expected vs actual output nodes
+        actual_output_ids = set(outputs.keys())
+        expected_output_ids = set(expected_outputs)
+        missing_outputs = expected_output_ids - actual_output_ids
+        if missing_outputs:
+            print(f"worker-comfyui - WARNING: {len(missing_outputs)} expected output nodes missing from history: {sorted(missing_outputs)}")
+            # Check if prompt had validation issues
+            status_msgs = prompt_history.get("status", {}).get("status_str", "unknown")
+            print(f"worker-comfyui - Prompt status: {status_msgs}")
+            # Log any messages from execution
+            exec_msgs = prompt_history.get("status", {}).get("messages", [])
+            if exec_msgs:
+                for msg in exec_msgs:
+                    print(f"worker-comfyui - Execution message: {msg}")
 
         if not outputs:
             warning_msg = f"No outputs found in history for prompt {prompt_id}."
@@ -943,6 +979,10 @@ def handler(job):
 
     # Videos saved to network volume (not base64-encoded)
     final_result["videos"] = volume_videos
+
+    # Diagnostic: report missing output nodes so callers can debug
+    if missing_outputs:
+        final_result["missing_outputs"] = sorted(missing_outputs)
 
     if errors:
         final_result["errors"] = errors
